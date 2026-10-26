@@ -1,0 +1,24 @@
+[package]
+name = "rustler_test"
+version = "0.1.0"
+authors = []
+edition = "2021"
+
+[lib]
+name = "rustler_test"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "hello-rust"
+path = "src/main.rs"
+
+[features]
+nif_version_2_14 = ["rustler/nif_version_2_14"]
+nif_version_2_15 = ["nif_version_2_14", "rustler/nif_version_2_15"]
+nif_version_2_16 = ["nif_version_2_15", "rustler/nif_version_2_16"]
+nif_version_2_17 = ["nif_version_2_16", "rustler/nif_version_2_17"]
+nif_version_2_18 = ["nif_version_2_17", "rustler/nif_version_2_18"]
+
+[dependencies]
+rustler = { path = "../../../rustler", features = ["allocator"] }

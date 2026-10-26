@@ -1,0 +1,282 @@
+# Upgrade
+
+This document is intended to simplify upgrading to newer versions by extending
+the changelog.
+
+## 0.39 -> 0.40
+
+1. The default NIF API version is raised to 2.17 (Erlang/OTP 26). To target an
+   older OTP version, disable default features and explicitly enable the
+   required NIF version in your `Cargo.toml`, for example:
+
+   ```toml
+   rustler = { version = "0.40", default-features = false, features = ["nif_version_2_15"] }
+   ```
+
+2. Decoding an integer the target type cannot hold now fails with
+   `Error::BadArg` (an `ArgumentError` in Elixir) instead of truncating it:
+   `256` no longer decodes as a `u8` equal to `0`. Code that relied on the
+   truncation should decode a wider type and convert it explicitly, such as
+   `term.decode::<u32>()? as u8`.
+
+## 0.38 -> 0.39
+
+1. The following methods are now infallible, returning the result directly
+   instead of an `Option` or `Result` that would require matching or handling:
+
+   - `OwnedBinary::new`
+   - `OwnedBinary::from_unowned`
+   - `Binary::to_owned`
+
+   Instead, allocation errors will now call `std::alloc::handle_alloc_error`.
+   This is the same behaviour that the Rust standard library applies (e.g. for
+   `Vec`) and in line with other allocating functions in `rustler`.
+
+2. `rustler::wrapper` has been removed without replacement. For low-level access
+   to the NIF API functions, please use the unsafe wrappers from `rustler::sys`
+   directly. Safe wrappers are provided in the `rustler` API.
+
+## 0.37 -> 0.38
+
+The following deprecated codegen features have been dropped:
+
+- `resource!` macro, please use `resource_impl`
+- Explicit NIF function listing in `init!`, please remove the list
+
+## 0.34 -> 0.35
+
+`rustler_sys` as a standalone library has been replaced by an embedded
+`rustler::sys` submodule. Due to how the `rustler_/::sys` initialisation works,
+it is not possible to use the new `rustler` in conjunction with `rustler_sys`. A
+simple textual replacement is enough, though.
+
+## 0.33 -> 0.34
+
+1. NIF implementations are now discovered automatically, the respective argument
+   in the `rustler::init!` macro should be removed. If a NIF implementation
+   should not be exported, it must be disabled with a `#[cfg]` marker.
+2. The functionality related to the `derive` feature is now unconditionally
+   active. The feature flag is kept for compatibility for now but will be
+   removed in the future.
+3. To use a type as a resource, the `Resource` trait should now be implemented
+   on the type, which also allows for specifying a destructor (taking an `Env`
+   argument) or a `down` callback for process monitoring. If the recommended
+   `resource_impl` attribute is used on the `impl` block, the type will by
+   default be automatically registered and the `IMPLEMENTS_...` constants will
+   be set for implemented callbacks.
+
+## 0.32 -> 0.33
+
+The macro changes that where already carried out in version `0.22` are now
+mandatory, the deprecated macros have been removed. Please see below for
+documentation on how to convert from the old to the new set of macros.
+
+## 0.31 -> 0.32
+
+1. The functionality of `rustler_bigint` has moved into `rustler`. The library
+   will still work, but it can now also be replaced by activating the new
+   `big_integer` feature on `rustler`. The new `rustler::BigInt` is a re-export
+   of `num_bigint::BigInt` in contrast to `rustler_bigint::BigInt`, which was a
+   wrapper. For most codebases, it will be enough to activate the feature and
+   replace all `rustler_bigint::BigInt` usages by `rustler::BigInt` (or
+   `num_bigint::BigInt`).
+2. `serde_rustler` has been integrated into `rustler` behind the feature flag
+   `serde`. Arbitrary, `serde`-compatible objects (i.e. with `Deserialize` or
+   `Serialize` `impl`s) can be wrapped in `SerdeTerm` to use them in place of
+   `Encoder` or `Decoder`. The API is for now considered experimental.
+
+## 0.29 -> 0.30
+
+1. `rustler_crates` configuration is deprecated in favor of explicitly passing
+   options on `use Rustler` or configuring the module in your `config/*.exs`
+   files.
+
+2. `Env::send` and `OwnedEnv::send_and_clear` will now return a `Result`.
+   Updating will thus introduce warnings about unused `Result`s. To remove the
+   warnings without changing behaviour, the `Result`s can be "used" as
+
+   ```rust
+   let _ = env.send(...)
+   ```
+
+   Neither the `Ok` nor the `Err` case carry additional information so far. An
+   error is returned if either the receiving or the sending process is dead.
+   See also
+   [enif\_send](https://www.erlang.org/doc/man/erl_nif.html#enif_send).
+
+3. As `Term::get_type` is now implemented using `enif_get_type` on all
+   non-Windows systems, some cases of the `TermType` `enum` are changed,
+   removed, or added (on all systems):
+   1. `EmptyList` is dropped, `List` is returned for both empty and non-empty
+      lists
+   2. `Exception` is dropped
+   3. `Number` is split into `Integer` and `Float` (if NIF 2.14 support is
+      explicitly enforced, only `Float` is returned)
+
+4. The default NIF version is raised to 2.15 to make use of `enif_get_type`. To
+   use a compiled NIF with an older version than OTP22, disable the default
+   features and expliictly use the `nif_version_2_14` feature in the library's
+   `Cargo.toml`:
+
+   ```toml
+   rustler = { version = "0.30", default-features = false, features = ["derive", "nif_version_2_14"] }
+   ```
+
+5. As noted for the `0.28 -> 0.29` transition below, the environment variable
+   `RUSTLER_NIF_VERSION` will not be considered anymore from 0.30 onwards.
+
+## 0.28 -> 0.29
+
+`RUSTLER_NIF_VERSION` is deprecated and will not be considered anymore for 0.30.
+The NIF version will also not be guessed anymore from a potentially available
+installed Erlang version. By default, NIF libraries will now be compiled against
+NIF version 2.14 which is compatible down to OTP21. The default will be adjusted
+along with the supported OTP versions.
+
+If additional features are required that use newer NIF versions, these can be
+included explicitly in the project's `Cargo.toml` as, e.g.
+
+```toml
+[dependencies]
+rustler = { version = "0.30", features = ["nif_version_2_17"] }
+```
+
+With this configuration, the resulting NIF library will only work from OTP26
+onwards, but will also have access to the largest feature set.
+
+## 0.26 -> 0.27
+
+`MIX_ENV` is no longer considered for determining the build profile. Now, the
+profile defaults to `:release`. Use the `:mode` option to pick another profile
+explicitly. See #496.
+
+## 0.21 -> 0.22
+
+0.22 changes how to define NIFs. Users upgrading to 0.22 should to do these things:
+
+1. Replace `rustler_atoms!` with `rustler::atoms!`
+2. Replace `resource_struct_init!` with `rustler::resource!`
+3. Replace `rustler::rustler_export_nifs!` with `rustler::init!`
+4. Use the new `rustler::nif` proc_macro to declare NIFs
+
+Replacing `rustler_atoms!` with `rustler::atoms!` is fairly simple and already
+sufficiently described in [CHANGELOG.md](./CHANGELOG.md). Similarly, replacing
+`resource_struct_init!` with `rustler::resource!` is a simple rename, so this does
+not need additional examples here.
+
+### Replace `rustler::rustler_export_nifs!` with `rustler::init!`
+
+`rustler::init!` in combination with the new `rustler::nif` proc_macro
+simplifies exporting NIFs. Before, the NIFs and their arity needed to be specified
+using tuple syntax:
+
+```rust
+rustler::rustler_export_nifs! {
+    "Elixir.Math",
+    [
+        ("add", 2, add),
+        ("long_running_operation", 0, long_running_operation, SchedulerFlags::DirtyCpu)
+    ],
+    None
+}
+```
+
+Now, listing the NIFs directly is sufficient:
+
+```rust
+rustler::init!("Elixir.Math", [add, long_running_operation]);
+```
+
+With this new macro, defining an `on_load` function (e.g. to set up a resource with
+`rustler::resource!`), is done like this:
+
+```rust
+rustler::init!("Elixir.Math", [add, long_running_operation], load = a_function);
+```
+
+Note that NIF flags such as `SchedulerFlags::DirtyCpu` are not declared in `rustler::init!`, but
+using the proc_macro `rustler::nif`. See further below for information on migration NIF flags.
+
+### Use the new `rustler::nif` proc_macro to declare NIFs
+
+0.22 introduces a new `proc_macro` allowing to spell out the parameter of a NIF
+directly instead of using an `args: &[Term<'a>]`. Lets consider an example `add()`,
+where the Elixir function looks like this:
+
+```elixir
+def add(left, right), do: :erlang.nif_error(:not_loaded)
+```
+
+Previously, the signature of the corresponding NIF might have looked like this:
+
+```rust
+fn add<'a>(env: Env<'a>, args: &[Term<'a>]) -> Result<Term<'a>, Error>
+```
+
+When calling the NIF from Elixir as `add(1, 2)`, `args` would then contain two
+`Term`, one for 1, and one for 2. With 0.22, this becomes more obvious, as the
+NIFs signature resembles the Elixir function's signature:
+
+```rust
+#[rustler::nif]
+fn add(a: i64, b: i64) -> i64
+```
+
+Under the hood, this is implemented by the `rustler::nif` proc_macro. For the
+new form to work, the parameters' types need to implement `Decoder`, and the
+return type needs to implement `Encoder`.
+
+#### What if `Env` is required in the function?
+
+Sometimes, we still need the environment `Env` for the NIF. For example, if
+work with `Binary` and `OwnedBinary`, the environment would be needed to create a `Binary`
+from an `OwnedBinary`. To allow this, `env: Env<'a>` can be added explicitly as well:
+
+```rust
+#[rustler::nif]
+pub fn map_entries_sorted<'a>(env: Env<'a>, iter: MapIterator<'a>) -> NifResult<Vec<Term<'a>>>
+```
+
+`env` can then be used the same way as before.
+
+#### Migrating Flags and Rename
+
+The `rustler::nif` proc_macro allows setting options directly on a NIF. Assume that we have a
+NIF called `_long_running_operation`, which used to be declared prior to Rustler v0.22 like this:
+
+```rust
+// Before
+
+rustler::rustler_export_nifs! {
+    "Elixir.SomeNif",
+    [
+        // Note that the function in Rust is long_running_operation, but the NIF is exported as
+        // _long_running_operation!
+        ("_long_running_operation", 0, long_running_operation, SchedulerFlags::DirtyCpu)
+    ],
+    None
+}
+
+fn long_running_operation<'a>(env: Env<'a>, _args: &[Term<'a>]) -> Result<Term<'a>, Error> {
+  // ...
+}
+```
+
+This definition declares that a function `_long_running_operation` with arity
+zero is to be exported, and that this function should be schedules on the
+`DirtyCpu` scheduler. With the changes in Rustler v0.22, the function would be declared like
+this:
+
+```rust
+// Now
+
+rustler::init!("Elixir.SomeNif", [long_running_operation]);
+
+#[rustler::nif(
+    rename = "_long_running_operation",
+    schedule = "DirtyCpu"
+  )]
+fn long_running_operation() -> TheProperReturnType {
+ // ..
+}
+```

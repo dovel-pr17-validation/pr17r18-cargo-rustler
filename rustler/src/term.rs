@@ -1,0 +1,210 @@
+use crate::sys::*;
+use crate::types::binary::OwnedBinary;
+use crate::{Binary, Decoder, Env, NifResult};
+use std::cmp::Ordering;
+use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
+
+/// Term is used to represent all erlang terms. Terms are always lifetime limited by a Env.
+///
+/// Term is cloneable and copyable, but it can not exist outside of the lifetime of the Env
+/// that owns it.
+#[derive(Clone, Copy)]
+pub struct Term<'a> {
+    term: ErlNifTerm,
+    env: Env<'a>,
+}
+
+pub(crate) fn fmt(term: ErlNifTerm, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    const SIZE: usize = 1024;
+    let mut bytes: Vec<u8> = Vec::with_capacity(SIZE);
+
+    let mut n = 0;
+    for _ in 0..10 {
+        let i = unsafe {
+            enif_snprintf!(
+                bytes.as_mut_ptr() as *mut c_char,
+                bytes.capacity(),
+                b"%T\x00" as *const u8 as *const c_char,
+                term
+            )
+        };
+        if i < 0 {
+            // Do not propagate an error, because string formatting is
+            // supposed to be infallible.
+            break;
+        }
+
+        n = i as usize;
+        if n >= bytes.capacity() {
+            // Bizarrely, enif_snprintf consistently underestimates the
+            // amount of memory it will need to write long lists. To try to
+            // avoid going around the loop again, double the estimate.
+            bytes.reserve_exact(2 * n + 1);
+
+            // Ensure that the `set_len` call below does not expose
+            // uninitialized bytes if we give up after 10 attempts.
+            n = 0;
+        } else {
+            break;
+        }
+    }
+
+    unsafe {
+        bytes.set_len(n);
+    }
+    f.write_str(&String::from_utf8_lossy(&bytes))
+}
+
+impl Debug for Term<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        fmt(self.as_c_arg(), f)
+    }
+}
+
+impl<'a> Term<'a> {
+    /// Create a `Term` from a raw `ErlNifTerm`.
+    ///
+    /// # Unsafe
+    /// The caller must ensure that `env` is the environment that `inner` belongs to,
+    /// unless `inner` is an atom term.
+    #[inline]
+    pub unsafe fn new(env: Env<'a>, inner: ErlNifTerm) -> Self {
+        Term { term: inner, env }
+    }
+    /// This extracts the raw term. It is usually used in order to obtain a type that can
+    /// be passed to calls into the erlang vm.
+    #[inline]
+    pub fn as_c_arg(&self) -> ErlNifTerm {
+        self.term
+    }
+
+    #[inline]
+    pub fn get_env(self) -> Env<'a> {
+        self.env
+    }
+
+    /// Returns a representation of self in the given Env.
+    ///
+    /// If the term is already is in the provided env, it will be directly returned. Otherwise
+    /// the term will be copied over.
+    #[inline]
+    pub fn in_env<'b>(&self, env: Env<'b>) -> Term<'b> {
+        if self.get_env() == env {
+            // It's safe to create a new Term<'b> without copying because we
+            // just proved that the same environment is associated with both 'a
+            // and 'b.  (They are either exactly the same lifetime, or the
+            // lifetimes of two .run() calls on the same OwnedEnv.)
+            unsafe { Term::new(env, self.as_c_arg()) }
+        } else {
+            unsafe { Term::new(env, enif_make_copy(env.as_c_arg(), self.as_c_arg())) }
+        }
+    }
+
+    /// Decodes the Term into type T.
+    ///
+    /// This should be used as the primary method of extracting the value from a Term.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let term: Term = ...;
+    /// let number: i32 = term.decode()?;
+    /// ```
+    pub fn decode<T>(self) -> NifResult<T>
+    where
+        T: Decoder<'a>,
+    {
+        Decoder::decode(self)
+    }
+
+    /// Decodes the Term into Binary
+    ///
+    /// This could be used as a replacement for [`decode`] when decoding Binary from an iolist
+    /// is needed.
+    ///
+    /// [`decode`]: #method.decode
+    #[inline]
+    pub fn decode_as_binary(self) -> NifResult<Binary<'a>> {
+        if self.is_binary() {
+            return Binary::from_term(self);
+        }
+        Binary::from_iolist(self)
+    }
+
+    #[inline]
+    pub fn to_binary(self) -> OwnedBinary {
+        let mut binary = std::mem::MaybeUninit::uninit();
+        let success = unsafe {
+            enif_term_to_binary(self.env.as_c_arg(), self.as_c_arg(), binary.as_mut_ptr())
+        };
+        assert_ne!(success, 0, "term_to_binary failed");
+        let raw_binary = unsafe { binary.assume_init() };
+        unsafe { OwnedBinary::from_raw(raw_binary) }
+    }
+
+    /// Non-portable hash function that only guarantees the same hash for the same term within
+    /// one Erlang VM instance.
+    ///
+    /// It takes 64-bit salt values and generates hashes within 0..2^64-1 (0..2^32-1 before OTP 27).
+    pub fn hash_internal(&self, salt: u64) -> u64 {
+        unsafe { enif_hash(ErlNifHash::ERL_NIF_INTERNAL_HASH, self.as_c_arg(), salt) }
+    }
+
+    /// Portable hash function that gives the same hash for the same Erlang term regardless of
+    /// machine architecture and ERTS version.
+    ///
+    /// It generates hashes within 0..2^27-1.
+    pub fn hash_phash2(&self) -> u32 {
+        unsafe { enif_hash(ErlNifHash::ERL_NIF_PHASH2, self.as_c_arg(), 0) as u32 }
+    }
+
+    #[cfg(feature = "nif_version_2_15")]
+    pub fn get_erl_type(&self) -> ErlNifTermType {
+        unsafe { enif_term_type(self.env.as_c_arg(), self.as_c_arg()) }
+    }
+
+    #[cfg(feature = "nif_version_2_18")]
+    pub fn size(&self) -> usize {
+        unsafe { enif_term_size(self.as_c_arg()) }
+    }
+}
+
+impl PartialEq for Term<'_> {
+    fn eq(&self, other: &Term) -> bool {
+        unsafe { enif_is_identical(self.as_c_arg(), other.as_c_arg()) == 1 }
+    }
+}
+impl Eq for Term<'_> {}
+
+fn cmp(lhs: &Term, rhs: &Term) -> Ordering {
+    let ord = unsafe { enif_compare(lhs.as_c_arg(), rhs.as_c_arg()) };
+    match ord {
+        0 => Ordering::Equal,
+        n if n < 0 => Ordering::Less,
+        _ => Ordering::Greater,
+    }
+}
+
+impl Ord for Term<'_> {
+    fn cmp(&self, other: &Term) -> Ordering {
+        cmp(self, other)
+    }
+}
+impl<'a> PartialOrd for Term<'a> {
+    fn partial_cmp(&self, other: &Term<'a>) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for Term<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // As far as I can see, there is really no way
+        // to get a seed from the hasher. This is definitely
+        // not optimal, but it's the best we can do for now.
+        state.write_u64(self.hash_internal(0));
+    }
+}
+
+unsafe impl Sync for Term<'_> {}
+unsafe impl Send for Term<'_> {}

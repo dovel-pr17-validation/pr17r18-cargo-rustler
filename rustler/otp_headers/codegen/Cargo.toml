@@ -1,0 +1,8 @@
+[package]
+name = "nif-api-codegen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lang-c = "0.15"

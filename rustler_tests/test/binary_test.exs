@@ -1,0 +1,79 @@
+defmodule RustlerTest.BinaryTest do
+  use ExUnit.Case, async: true
+
+  test "subbinary creation" do
+    assert RustlerTest.make_shorter_subbinary("test") == "es"
+    assert_raise ArgumentError, fn -> RustlerTest.make_shorter_subbinary("t") end
+  end
+
+  test "parse integer from binary" do
+    assert RustlerTest.parse_integer("12") == 12
+    assert RustlerTest.parse_integer("-254") == -254
+    assert_raise ArgumentError, fn -> RustlerTest.parse_integer("test") end
+    assert_raise ArgumentError, fn -> RustlerTest.parse_integer("999999999999999999999") end
+  end
+
+  test "binary creation" do
+    assert RustlerTest.binary_new() == <<1, 2, 3, 4>>
+  end
+
+  test "owned binary creation" do
+    assert RustlerTest.owned_binary_new() == <<1, 2, 3, 4>>
+  end
+
+  test "new binary creation" do
+    assert RustlerTest.new_binary_new() == <<1, 2, 3, 4>>
+  end
+
+  test "new binary from iter" do
+    assert RustlerTest.new_binary_from_iter() == <<1, 2, 3, 4>>
+  end
+
+  test "owned binary from iter" do
+    assert RustlerTest.owned_binary_from_iter() == <<1, 2, 3, 4>>
+  end
+
+  test "unowned binary to owned" do
+    assert RustlerTest.unowned_to_owned("test") == <<1, "est">>
+    assert RustlerTest.unowned_to_owned("whatisgoingon") == <<1, "hatisgoingon">>
+    # Notice that this also panic, but we are suppressing the message
+    # at the function implementation.
+    assert_raise ErlangError, fn -> RustlerTest.unowned_to_owned("") end
+  end
+
+  test "realloc shrink binary" do
+    assert RustlerTest.realloc_shrink() == <<1, 2, 3, 4>>
+  end
+
+  test "realloc grow binary" do
+    assert RustlerTest.realloc_grow() == <<1, 2, 3, 4, 5>>
+  end
+
+  test "encode string" do
+    assert RustlerTest.encode_string() == {"first", "second"}
+  end
+
+  test "decode iolist as binary" do
+    assert RustlerTest.decode_iolist(["hi", " ", "there"]) == "hi there"
+    assert RustlerTest.decode_iolist([[?h, ?i], ~c" ", ["there"]]) == "hi there"
+  end
+
+  test "iolist decode returns binary" do
+    assert RustlerTest.first_four_bytes_of_iolist("hi there") == "hi t"
+    assert RustlerTest.first_four_bytes_of_iolist(["hi there"]) == "hi t"
+    assert RustlerTest.first_four_bytes_of_iolist(["hi", " ", "there"]) == "hi t"
+    assert RustlerTest.first_four_bytes_of_iolist([[?h, ?i], ~c" ", ["there"]]) == "hi t"
+  end
+
+  test "trait Into" do
+    assert RustlerTest.array_into_binary() == <<1, 2, 3>>
+    assert RustlerTest.vec_into_binary() == <<1, 2, 3>>
+    assert RustlerTest.slice_into_binary() == <<1, 2, 3>>
+    assert RustlerTest.str_into_binary() == "foobar"
+    assert RustlerTest.string_into_binary() == "foobar"
+  end
+
+  test "trait From" do
+    assert RustlerTest.binary_from_str() == "foobar"
+  end
+end
