@@ -5,4 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
-lang-c = "0.15"
+lang-c = "0.15.1"
